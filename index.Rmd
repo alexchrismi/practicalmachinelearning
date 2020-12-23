@@ -5,26 +5,125 @@ date: "12/23/2020"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+## Introduction
+In this assignment we use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants that performed barbell lifts correctly and incorrectly in 5 different ways to predict the manner in which the exercise was done. First, we set-up the working space. We then explain how we built the model, how we used cross-validation and what the expected out-of-sample error of our final model is. Throughout the report, we justify the different choices made in our analysis. Have fun reading and thanks for reviewing this assignment!
+
+```{r setup, include = FALSE}
+dir <- "/Users/alexandersmit/My Documents/Dropbox/Business/01. Career management/00. Skills/03. R"
+setwd(dir)
 ```
 
-## R Markdown
+## Installing packages, setting-up functions and reading the data
+First, we loaded the necessary packages for our analysis, set-up a function that allows us to plot multiple graphs at the same time and read the data
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+```{r data, echo = FALSE}
+# Package installation
+library(caret)
+library(data.table)
+library(doParallel)
+library(ggplot2)
+library(gridExtra)
+library(parallel)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+# Setting-up functions
+plt.mul = function (data, column) { # function for writing plots to a list
+        ggplot(data, aes_string(x = column)) +
+        geom_histogram(fill = "skyblue2") +
+        xlab(column)
+}
 
-```{r cars}
-summary(cars)
+# Reading the data
+training <- data.frame(fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"))
+testing <- data.frame(fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"))
 ```
 
-## Including Plots
+## Building the model
+Before we built our model, we conducted exploratory data analysis to get an idea of the data set. Based on this exploratory step, we decided to reduce the data by (1) excluding irrelevant variables and (2) reduce the set of remaining variables.
 
-You can also embed plots, for example:
+### Ad. 1: Excluding irrelevant variables
+We got an idea of the different variables and the data structure by looking at the testing data set (without using it, mind you) and reading the explanation of the data set that can be found [here](https://archive.ics.uci.edu/ml/datasets/Weight+Lifting+Exercises+monitored+with+Inertial+Measurement+Unit). 
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+Regarding the testing data set, running a summary()-command already indicates which columns are useless because they all contain NA-values (to benefit the readability of this document, we leave this command out of this report). These NA-values are explained in the explanation of the data set as well: "Each IMU has x, y, and z values + euler angles (roll, pitch and yaw). For each time window (1s of data), there are several statistics calculations, like Kurtosis, Variance, etc.". We verified this for one of the time windows by filtering the 2nd time window (this corresponds to activities performed by Eurico), getting the only non-NA value for the avg_roll_belt variable and compare this value with the average of all roll_belt observations for this time window:
+
+```{r comparison}
+dta.tmp <- training[ training$num_window == 2, ]
+unique(dta.tmp$avg_roll_belt)[2]
+mean(dta.tmp$roll_belt)
+remove(dta.tmp)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+We also observed that some of the variables in the data set do not meaningfully predict the manner in which a subject does an exercise (the classe-score). These variables are the index (V1), the subject's name (user_name) and the different time indicators (raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window and num_window). Although such time indicators in a data set could reflect the presence of time series, this is not the case with this data: inspection of these time indicators using the sort(unique(training$cvtd_timestamp)) command reveals that all data was collected in a rather short time span (i.e. between 28/11/2011 & 05/12/2011). So, said variables are removed from both training and test set as well.
+
+```{r timeseriescheck}
+sort(unique(training$cvtd_timestamp))
+```
+
+After ascertaining that the variables are listed in the same order in both data frames by running the colnames(testing) == colnames(training) command (except for the target variable, which differs), we select the potential useful columns.
+
+```{r selection}
+unique(colnames(training[, -c(160)]) == colnames(testing[, -c(160)]))
+training <- training[ c(8:11, 37:49, 60:68, 84:86, 102, 113:124, 140, 151:160) ]
+testing <- testing[ c(8:11, 37:49, 60:68, 84:86, 102, 113:124, 140, 151:160) ]
+```
+
+### Ad. 2: Data reduction through principal component analysis
+The remaining training dataset still has quite some predictors (52 in total). Given the nature of the measurements (e.g. acceleration in the x, y and z-direction when performing a certain action, which can be expected to be strongly correlated), it only seems logical to try to further reduce this data. We do this using principal component analysis. To see if the data is suitable for this, we first plot all predictors (because the grid.arrange function seems to be a bit unstable with a large number of graphs, we commented this code out)
+
+```{r plotting}
+# plt <- lapply(colnames(training), plt.mul, data = training)
+# do.call("grid.arrange", c(plt[ 1:16], nrow = 4, ncol = 4))
+# do.call("grid.arrange", c(plt[17:32], nrow = 4, ncol = 4))
+# do.call("grid.arrange", c(plt[33:48], nrow = 4, ncol = 4))
+# do.call("grid.arrange", c(plt[49:52], nrow = 4, ncol = 4))
+```
+
+From this data inspection step we deduced that there are no outliers. This also makes sense if you think about it: unless the researchers invited the Hulk or someone the like, it is not very likely that extreme large values compared to the mean will occur in this type of human exercise data. As an additional exploration step, we run the preProcess-function to conduct the pca:
+
+```{r pca}
+preProcess(training[, -53], method = "pca") # the 53th column contains the target variable, which is left out
+```
+
+So, this reduction step yields 25 components that captures 95% of the variance in the orginal dataset, which is quite a bit. We therefore continue working with the reduced data set. This is great, as it also speeds up our subsequent modelling efforts. Following the advice found [here](https://stats.stackexchange.com/questions/46216/pca-and-k-fold-cross-validation-in-caret-package-in-r), we add the preprocess command to the train-function below and do not do this upfront.
+
+### Modeling strategy
+It is easy to get lost in the many parameters one can set in the train function (i.e. the trainControl-argument). We therefore decided to take the code that was provided during the lecture as a starting point and optimize this code for this specific data.
+
+Regarding our modeling strategy, our preferred modeling strategy would be one of stacking (i.e. estimating 3 different models, stacking the resulting predictions together and use the resulting data set to predict the outcomes of the testing data). Unfortunately, this is *not* possible due to the lack of the outcome variable in the testing data. We therefore use the random forest, which according to the lecture is one of the most accurate classification methods (together with boosting). An important consideration of working with large data sets is modeling speed. We took two measures to speed-up model estimation. The first one is changing the default bootstrapping for cross-validation to repeated k-fold cross validaion. Not only are the lecture slides a bit ambivalent as to the use of bootstrapping (see the corresponding slides), repeated k-fold cross validation is also advised to use with random forests (see e.g. https://bit.ly/3ph4jqS) as it reduces both bias and variance (another topic that seems to be highly debated, but that is for a different assignment). 
+
+```{r crossvalidationcontrol}
+cvc <- trainControl(method = "repeatedcv", # this stands for repeated k-fold cross validation 
+                    number = 10, # the training data is randomly divided in 10 parts. Each of these parts is testing data for the model trained on the other 9. The error terms are averaged
+                    repeats = 5, # the above process is repeated 5 times, and again the 5 error terms are averaged
+                    allowParallel = TRUE) # parallel computing is allowed
+```
+
+The number of repeats might have been a bit too high with the benefit of hindsight, but the most important thing is that this code works and leads to an outcome reasonably fast. We also allow for parallel computing using the command below. This allows the model to be estimated using most of the processor cores simultaneously.
+
+```{r parallel}
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+
+## Fitting the model and expected out-of-sample error
+Now we fit the model (and have a coffee, as the train-command below takes about 20 minutes. It probably could be shorter but it works like a charm and I live my live slowly anyway):
+
+```{r fit}
+mod.rf <- train(classe ~., 
+                data = training, 
+                method = "rf", 
+                verbose = FALSE,
+                trControl = cvc,
+                preProcess = c("pca"))
+
+# De-registering the parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+We can assess the quality of our model by looking at the confusion matrix (using the training data, as the testing data does not contain the classe variable. The confusion matrix using the training data is based on a comparison of the modeled data to th held-out folds):
+
+```{r confusion}
+confusionMatrix.train(mod.rf)
+```
+
+The reported accuracy of the model is very high (close to 100%), which means that the model suits the training data well (in other words: the off-diagonal percentages are very low). We can also expect that this model is a little tuned to the noise in this training data, which implies that it will perform less well for the test data. Hence, the out-of-sample error for this test data will be larger. We did manage to get a 100% score for the prediction quiz, though. Although this does not say anything about the accuracy of our model (it probably is because the answers in the quiz are based on the predicted value, *not* on the observed values) it at least suggest this is the type of model the instructors envisioned when making this assignment. Cool stuff! :)
