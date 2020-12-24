@@ -86,9 +86,15 @@ preProcess(training[, -53], method = "pca") # the 53th column contains the targe
 So, this reduction step yields 25 components that capture 95% of the original data set variance, which is quite a bit. We, therefore, continue working with the reduced data set. This is great, as it also speeds up our subsequent modelling efforts. Following the advice found [here](https://stats.stackexchange.com/questions/46216/pca-and-k-fold-cross-validation-in-caret-package-in-r), we add the preprocess command to the train-function below and do not do this upfront.
 
 ### Modelling strategy
-It is easy to get lost in the many parameters one can set in the train function (i.e. the trainControl-argument). We, therefore, decided to take the code that was provided during the lecture as a starting point and optimize this code for this specific data.
+It is easy to get lost in the many parameters one can set in the train function (i.e. the trainControl-argument). We, therefore, decided to take the code that was provided during the lecture as a starting point and optimize this code for this specific data. First, we split the training data into a training and a validation set:
 
-Regarding our modelling strategy, our preferred strategy would be one of stacking (i.e. estimating 3 different models, stacking the resulting predictions together and use the resulting data set to predict the outcomes of the testing data). Unfortunately, this is *not* possible due to the lack of the outcome variable in the testing data. We, therefore, use the random forest, which, according to the lecture, is one of the most accurate classification methods (together with boosting). An important consideration of working with large data sets is modelling speed. We took two measures to speed-up model estimation. The first one is changing the default bootstrapping for cross-validation to repeated k-fold cross validation. Not only are the lecture slides a bit ambivalent as to the use of bootstrapping (see the corresponding slides), repeated k-fold cross-validation is also advised to use with random forests (see, e.g. https://bit.ly/3ph4jqS) as it reduces both bias and variance (another topic that seems to be highly debated, but that is for a different assignment). 
+```{r splitting}
+inTrain <- createDataPartition(y = training$classe, p = 0.7, list = FALSE)
+training <- training[inTrain, ]
+validation <- training[-inTrain, ]
+```
+
+The model we use is the random forest, which according to the lecture is one of the most accurate classification methods (together with boosting). An important consideration of working with large data sets is modelling speed. We took two measures to speed-up model estimation. The first one is changing the default bootstrapping for cross-validation to repeated k-fold cross validation. Not only are the lecture slides a bit ambivalent as to the use of bootstrapping (see the corresponding slides), repeated k-fold cross-validation is also advised to use with random forests (see, e.g. https://bit.ly/3ph4jqS) as it reduces both bias and variance (another topic that seems to be highly debated, but that is for a different assignment). 
 
 ```{r crossvalidationcontrol}
 cvc <- trainControl(method = "repeatedcv", # this stands for repeated k-fold cross validation 
@@ -104,8 +110,8 @@ cluster <- makeCluster(detectCores() - 1)
 registerDoParallel(cluster)
 ```
 
-## Fitting the model and expected out-of-sample error
-Now we fit the model (and have a coffee, as the train-command below takes about 20 minutes. It probably could be shorter but it works like a charm and I live my life slowly anyway):
+## Model validation:
+Fitting the model:
 
 ```{r fit}
 mod.rf <- train(classe ~., 
@@ -115,15 +121,24 @@ mod.rf <- train(classe ~.,
                 trControl = cvc,
                 preProcess = c("pca"))
 mod.rf
+confusionMatrix.train(mod.rf)
+
 # De-registering the parallel processing cluster
 stopCluster(cluster)
 registerDoSEQ()
 ```
 
-We can assess the quality of our model by looking at the confusion matrix (using the training data, as the testing data does not contain the classe variable. The confusion matrix using the training data is based on a comparison of the modelled data to the held-out folds):
+We can assess the suitability of this model by applying it to the validation data and looking at the confusion matrix. 
 
-```{r confusion}
-confusionMatrix.train(mod.rf)
+``` {r validation}
+mod.val <- predict(mod.rf, validation)
+mat <- table(mod.val, validation$classe) # confusion matrix
+``` 
+
+We then calculate the accuracy of this model:
+
+``` {r accuracy}
+round(sum(diag(mat) / sum(mat)), 2)
 ```
 
-The model's reported accuracy is very high (close to 100%), which means that the model suits the training data well (in other words: the off-diagonal percentages are very low).We can also expect that this model is a little tuned to the noise in this training data, which implies that it will perform less well for the test data. Hence, the out-of-sample error for this test data will be larger. We did manage to get a 100% score for the prediction quiz, though. Although this does not say anything about our model's accuracy (it probably is because the answers in the quiz are based on the predicted value, *not* on the observed values), it at least suggests this is the type of model the instructors envisioned when making this assignment. Cool stuff! :)
+From this confusion matrix -as well as a comparison of the reported accuracies, which for the training data is based on a comparison of the modelled data to the held-out folds- we believe that the model makes a reasonable prediction of the classe-variable in the validation data set. The accuracy of the model applied to the training data is a bit higher. This is because the model is a little tuned to the noise in this training data, which implies that it will perform less well for the testing data and hence, the out-of-sample error for the validation set is larger (and with that its accuracy is lower).We did manage to get a 100% score for the prediction quiz, though. Although this does not say anything about our model's accuracy (it probably is because the answers in the quiz are based on the predicted value, *not* on the observed values), it at least suggests this is the type of model the instructors envisioned when making this assignment. Cool stuff! :)
