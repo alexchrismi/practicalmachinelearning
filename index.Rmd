@@ -2,7 +2,9 @@
 title: "Practical Machine Learning Course Project"
 author: "Alexander Smit"
 date: "12/23/2020"
-output: html_document
+output: 
+  html_document:
+    keep_md: true
 ---
 
 ## Introduction
@@ -132,13 +134,7 @@ We can assess the suitability of this model by applying it to the validation dat
 
 ``` {r validation}
 mod.val <- predict(mod.rf, validation)
-mat <- table(mod.val, validation$classe) # confusion matrix
+confusionMatrix(mod.val, as.factor(validation$classe))
 ``` 
 
-We then calculate the accuracy of this model:
-
-``` {r accuracy}
-round(sum(diag(mat) / sum(mat)), 2)
-```
-
-From this confusion matrix -as well as a comparison of the reported accuracies, which for the training data is based on a comparison of the modelled data to the held-out folds- we believe that the model makes a reasonable prediction of the classe-variable in the validation data set. The accuracy of the model applied to the training data is a bit higher. This is because the model is a little tuned to the noise in this training data, which implies that it will perform less well for the testing data and hence, the out-of-sample error for the validation set is larger (and with that its accuracy is lower).We did manage to get a 100% score for the prediction quiz, though. Although this does not say anything about our model's accuracy (it probably is because the answers in the quiz are based on the predicted value, *not* on the observed values), it at least suggests this is the type of model the instructors envisioned when making this assignment. Cool stuff! :)
+From this confusion matrix we infer that the model makes a perfect prediction of the classe-variable in the validation data set. This is a bit counter-intuitive: one would expect the model to be a little tuned to the noise in the training data, which implies that it will perform less well for the validation data. Hence, one would expect the out-of-sample error for the validation set to be larger (and with that a lower accuracy). Maybe the instructors pre-processed the data for this a bit, so it would also be possible to make an accurate prediction for all 20 cases in the test set (we did manage to get a 100% score for the prediction quiz, so we are sure our model does what it should do)?
